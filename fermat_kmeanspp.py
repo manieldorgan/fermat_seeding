@@ -76,10 +76,22 @@ def make_dataset(kind, noise_frac=None, seed=0):
     return X, y
 
 
-def build_graph(X, p, k=10) -> sp.csr_array:
+def build_connected_knn(X, k_start=10, step=5):
+    """
+    Returns sparse, symmetric, connected, UNWEIGHTED knn graph
+    """
+    k = k_start
     D = sp.csr_array(neighbors.kneighbors_graph(X, k, mode="distance"))
-    D.data**p
-    D = D.maximum(D.T)
+    G = D.maximum(D.T)                                                   # Symmetrize by keeping an edge if either point is one of the other's k nearest
+    
+    connected = sp.csgraph.connected_components(G, directed=False)
+    while not connected:                                                 # keep increasing k until the graph is connected
+        k += step
+        D = sp.csr_array(neighbors.kneighbors_graph(X, k, mode="distance"))
+        G = D.maximum(D.T)
+        connected = sp.csgraph.connected_components(G, directed=False)
+
+    return G, k
 
 
 if __name__ == "__main__":
@@ -92,8 +104,9 @@ if __name__ == "__main__":
     os.makedirs("data", exist_ok=True)
     for kind, (X, y) in datasets.items():
         np.savez(f"data/{kind}.npz", X=X, y=y)
-    
-    
+
+    for dataset in datasets:
+        print(build_connected_knn(datasets[dataset][0]))
     
     
     

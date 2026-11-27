@@ -1,7 +1,8 @@
 import numpy as np
 import matplotlib.pyplot as plt
+from scipy import sparse as sp
 
-# Possibly use in make data set as helper function
+
 def add_noise(dataset, labels, noise_frac, rng, pad=1.0):
     """Add noise points with label -1 throughout a 2D point cloud dataset with padding around dataset boundary.
     
@@ -28,7 +29,7 @@ def add_noise(dataset, labels, noise_frac, rng, pad=1.0):
     
     return X, y
 
-# Refactor plot in main into here
+
 def check_datasets(datasets, centers=None, tol=0.1):
     """Plot each dataset colored by label and print basic checks.
 
