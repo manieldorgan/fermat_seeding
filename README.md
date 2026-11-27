@@ -30,4 +30,17 @@ Representation cost: the sum of distances from each point to its nearest seed, d
 - `fermat_kmeanspp` is adapted from scikit-learn's `_kmeans_plusplus` (version [x.y], BSD 3-Clause license; notice included in the source file). That function is private and changes between versions.
 
 
+## temp
 $p = 1$ column measures path length along the data, not Euclidean distance (not necessarily clear)
+
+changes made from scikit-learns k means++:
+- dijkstra on symmetric knn graph with weights $||x_ij-y_ij||^p$ is the same as fermat distance on graph so we just use dijkstra in place of euclidean distances
+- every point has weight 1 so sample_weight andm x_squared norms are unneeded
+- we track seed indices instead of coordinates since the coordinates are less meaningful with fermat distances
+- kept the default number of local trials for now.
+
+add 4th configuration to readme
+
+each p starts from the same point, so differences come from the metric rather than the starting draw.
+
+NN ∪ MST to guarantee connectivity without inflating k
