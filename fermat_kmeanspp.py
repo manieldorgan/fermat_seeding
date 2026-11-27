@@ -1,7 +1,9 @@
 import numpy as np
 from scipy import sparse as sp
 from sklearn import datasets, neighbors, cluster
-# import pandas as pd  (not yet installed in the glearning env)
+import pandas as pd
+import helpers as hp
+import os
 
 
 points_per_clust = 500                                          # per blob; 4 blobs -> 2000 points
@@ -9,11 +11,42 @@ clust_centers = [(0, 0), (0, 5), (4.33, -2.5), (-4.33, -2.5)]   # 120 degrees be
 seed = 0                                                        # for reproducibility
 
 
-def make_dataset(kind, noise_frac=0.0, seed=0):
+def make_dataset(kind, noise_frac=None, seed=0):
+    """Generate a 2-D test dataset for the seeding experiments.
+
+    "unequal" is four Gaussian blobs (500 points each) with standard
+    deviations 0.3, 0.5, 0.7 and 1.0, centered at `clust_centers`.
+    "unequal_noise" is the same blobs plus uniform background noise.
+    "moons" is scikit-learn's two interleaving half-circles (2000 points,
+    noise=0.1). Noise is only added for "unequal_noise".
+
+    Parameters
+    ----------
+    kind : {"unequal", "unequal_noise", "moons"}
+        Which dataset to generate.
+    noise_frac : float, optional
+        Number of noise points as a fraction of the clean points, so 0.1
+        with 2000 clean points adds 200 (about 9.1% of the final dataset).
+        Noise is drawn uniformly from the data's bounding box, padded by
+        1.0 on each side. Defaults to 0.1 for "unequal_noise"; ignored
+        for other kinds.
+    seed : int, default=0
+        Random seed for both the base dataset and the noise.
+
+    Returns
+    -------
+    X : ndarray of shape (n, 2)
+        Point coordinates. n is 2000, plus int(noise_frac * 2000) for
+        "unequal_noise".
+    y : ndarray of shape (n,)
+        Labels: blob or moon index for clean points, -1 for noise.
+
+    Raises
+    ------
+    ValueError
+        If `kind` is not one of the three options.
     """
-    parameter documentation to be added.
-    Returns: X shape (n, 2), y shape (n,) labels (noise points labeled -1)
-    """
+
     rng = np.random.default_rng(seed)
 
     if kind in ("unequal", "unequal_noise"):
@@ -22,23 +55,50 @@ def make_dataset(kind, noise_frac=0.0, seed=0):
             centers=clust_centers,
             cluster_std=[0.3, 0.5, 0.7, 1.0],
             random_state=seed,
-        )
+            )
     elif kind == "moons":
-        X, y = datasets.make_moons(n_samples=2000, noise=0.1, random_state=seed)
+        X, y = datasets.make_moons(
+            n_samples=2000,
+            noise=0.1,
+            random_state=seed
+            )
     else:
         raise ValueError(f"Invalid kind: '{kind}'")
 
+    # Adding uniform noise around the dataset in feature space.
     if kind == "unequal_noise":
-        pad = 1.0
-        low = X.min(axis=0) - pad             # padded bounding box, shape (2,)
-        high = X.max(axis=0) + pad
-        m = int(noise_frac * len(X))          # noise = noise_frac of the clean points
-        noise = rng.uniform(low, high, size=(m, 2))
+        if noise_frac is None: 
+            noise_frac = 0.1 
 
-        # TODO: stack `noise` onto X and m labels of -1 onto y
+        pad = 1.0
+        X, y = hp.add_noise(X, y, noise_frac, rng, pad)
 
     return X, y
 
 
+def build_graph(X, p, k=10) -> sp.csr_array:
+    D = sp.csr_array(neighbors.kneighbors_graph(X, k, mode="distance"))
+    D.data**p
+    D = D.maximum(D.T)
+
+
 if __name__ == "__main__":
-    ...
+    datasets = {
+                kind: make_dataset(kind, seed=seed)
+                for kind in ["unequal", "unequal_noise", "moons"]
+                }
+
+    hp.check_datasets(datasets, centers=clust_centers)
+    os.makedirs("data", exist_ok=True)
+    for kind, (X, y) in datasets.items():
+        np.savez(f"data/{kind}.npz", X=X, y=y)
+    
+    
+    
+    
+    
+    """LOAD CHECK
+    with np.load("data/unequal.npz") as data:
+        X_loaded, y_loaded = data["X"], data["y"]
+    print(np.array_equal(X_loaded, datasets["unequal"][0]), np.array_equal(y_loaded, datasets["unequal"][1]))
+    """
