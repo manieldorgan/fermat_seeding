@@ -59,7 +59,7 @@ configs = [
     ("moons", 4),
     ("moons", 2),
 ]
-p_values = [1, 2, 4, 8]
+p_values = [1, 2, 4, 8, 16]
 seed = 0
 
 
