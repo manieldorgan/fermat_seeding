@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
-def run_checks(
+def run_setup_checks(
     datasets,
     centers=None,
     seeds=None,
@@ -72,3 +72,53 @@ def run_checks(
         fig.savefig(save_path, dpi=150, bbox_inches="tight")
 
     plt.show()
+
+
+def check_scoring(label, dist_to_seeds, seeds, regions, cost):
+    """Print Step 4 sanity checks for one scored set of seeds.
+
+    Parameters
+    ----------
+    label : str
+        Printed at the start of the line, e.g. "unequal (k=4) | p = 2 | random".
+    dist_to_seeds : ndarray of shape (n_seeds, n)
+        Distances from each seed to every point.
+    seeds : ndarray of shape (n_seeds,)
+        Seed indices into the dataset.
+    regions : ndarray of shape (n,)
+        Nearest-seed index for each point, from representation_cost.
+    cost : float
+        Total cost, from representation_cost.
+
+    Returns
+    -------
+    bool
+        True if every check passed.
+    """
+    n_seeds = len(seeds)
+    finite = bool(np.isfinite(cost))
+    self_zero = bool(np.allclose(dist_to_seeds[np.arange(n_seeds), seeds], 0))
+    own_region = bool(np.array_equal(regions[seeds], np.arange(n_seeds)))
+    sizes = np.bincount(regions, minlength=n_seeds)
+
+    ok = finite and self_zero and own_region
+    print(
+        f"{label}: cost = {cost:.4g}, finite = {finite}, "
+        f"self-distance 0 = {self_zero}, seeds in own region = {own_region}, "
+        f"region sizes = {sizes}{'' if ok else '  <-- CHECK FAILED'}"
+    )
+    return ok
+
+
+def seed_coverage(y, seed_fn, n_runs=100):
+    # Just for testing
+    clean_labels = np.unique(y[y >= 0])
+    hits = np.zeros(len(clean_labels))
+    noise_picks = np.zeros(n_runs)
+
+    for r in range(n_runs):
+        seed_labels = y[seed_fn(r)]
+        hits += np.isin(clean_labels, seed_labels)
+        noise_picks[r] = (seed_labels == -1).sum()
+
+    return hits / n_runs, noise_picks.mean()

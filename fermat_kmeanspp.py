@@ -45,7 +45,7 @@ from scipy.sparse.csgraph import (
     dijkstra,
     minimum_spanning_tree,
 )
-from scipy.spatial.distance import pdist, squareform
+from scipy.spatial.distance import cdist, pdist, squareform
 from sklearn import cluster, neighbors
 from sklearn.datasets import make_blobs, make_moons
 
@@ -65,13 +65,9 @@ configs = [
     ("moons", 2),
 ]
 p_values = [1, 2, 4, 8, 16]
+metrics = ["euclidean", *p_values]
 k_nn = 10
 seed = 0
-
-
-def config_label(kind, n_seeds):
-    """Label used for a config in plots, checks, and the table."""
-    return f"{kind} (k={n_seeds})"
 
 
 def add_noise(
@@ -305,12 +301,71 @@ def fermat_kmeanspp(
     return indices
 
 
+def config_label(kind, n_seeds):
+    """Label used for a config in plots, checks, and the table."""
+    return f"{kind} (k={n_seeds})"
+
+
+def metric_label(metric):
+    """Display name for a metric: "Euclidean" or "p = <p>"."""
+    return "Euclidean" if metric == "euclidean" else f"p = {metric}"
+
+
+def distances_to_seeds(
+    seeds: np.ndarray,
+    X: np.ndarray | None = None,
+    G: sp.csr_array | None = None,
+):
+    """(n_seeds, n) distances: shortest paths on G if given, else Euclidean on X."""
+    if G is not None:
+        return dijkstra(G, directed=False, indices=seeds)
+    return cdist(X[seeds], X)
+
+
+def seed_points(metric, X, G, n_seeds, run):
+    """k-means++ seed indices for one run, in the given metric."""
+    if metric == "euclidean":
+        return cluster.kmeans_plusplus(X, n_seeds, random_state=run)[1]
+    return fermat_kmeanspp(G, n_seeds, np.random.default_rng(run))
+
+
+def random_seeds(n, n_seeds, run):
+    """Uniformly random distinct seed indices for one run (the baseline)."""
+    return np.random.default_rng([run, 1]).choice(n, n_seeds, replace=False)
+
+
+def representation_cost(dist_to_seeds: np.ndarray) -> tuple[np.ndarray, float]:
+    """Assign each point to its nearest seed and total the distances.
+
+    The cost is the sum, over all points, of the distance to the nearest
+    seed. The function is metric-agnostic: pass Fermat distances
+    (Dijkstra on the p graph) or Euclidean distances (cdist), and the
+    cost is in that metric.
+
+    Parameters
+    ----------
+    dist_to_seeds : ndarray of shape (n_seeds, n)
+        Entry [i, j] is the distance from seed i to point j.
+
+    Returns
+    -------
+    regions : ndarray of shape (n,)
+        Index (0 to n_seeds - 1) of the nearest seed for each point.
+    cost : float
+        Sum of each point's distance to its nearest seed.
+    """
+    nearest = dist_to_seeds.min(axis=0)
+    regions = dist_to_seeds.argmin(axis=0)
+    cost = nearest.sum()
+    return regions, cost
+
+
 if __name__ == "__main__":
     # DATASETS:
     kinds = list(dict.fromkeys(kind for kind, _ in configs))
     datasets = {kind: make_dataset(kind, seed=seed) for kind in kinds}
 
-    hp.run_checks(
+    hp.run_setup_checks(
         datasets, centers=clust_centers, save_path="figures/datasets.png"
     )
     os.makedirs("data", exist_ok=True)
@@ -334,24 +389,65 @@ if __name__ == "__main__":
             f"symmetric = {(G != G.T).nnz == 0}"
         )
 
-    # SEED CHECKS:
-    for p in p_values:
+    # SEED CHECKS (run 0, every metric):
+    for metric in metrics:
         panels, seeds = {}, {}
         for kind, n_seeds in configs:
+            X, y = datasets[kind]
+            G = None if metric == "euclidean" else graphs[kind][metric]
             label = config_label(kind, n_seeds)
-            G = graphs[kind][p]
 
-            a = fermat_kmeanspp(G, n_seeds, np.random.default_rng(seed))
-            b = fermat_kmeanspp(G, n_seeds, np.random.default_rng(seed))
-            print(f"p={p} {label}: reproducible = {np.array_equal(a, b)}")
+            a = seed_points(metric, X, G, n_seeds, run=0)
+            b = seed_points(metric, X, G, n_seeds, run=0)
+            print(
+                f"{metric_label(metric)} {label}: reproducible = {np.array_equal(a, b)}"
+            )
 
             panels[label] = datasets[kind]
             seeds[label] = a
 
-        hp.run_checks(
+        hp.run_setup_checks(
             panels,
             centers=clust_centers,
             seeds=seeds,
-            title=f"Fermat seeds, p = {p}",
-            save_path=f"figures/seeds_p{p}.png",
+            title=f"Seeds, {metric_label(metric)}",
+            save_path=f"figures/seeds_{metric}.png",
         )
+
+    # SCORING CHECKS (run 0, both methods, every metric):
+    all_ok = True
+    for kind, n_seeds in configs:
+        X, y = datasets[kind]
+        for metric in metrics:
+            G = None if metric == "euclidean" else graphs[kind][metric]
+            for method, s in [
+                ("kmeans++", seed_points(metric, X, G, n_seeds, run=0)),
+                ("random", random_seeds(len(X), n_seeds, run=0)),
+            ]:
+                D = distances_to_seeds(s, X=X, G=G)
+                regions, cost = representation_cost(D)
+                label = f"{config_label(kind, n_seeds)} | {metric_label(metric)} | {method}"
+                all_ok &= hp.check_scoring(label, D, s, regions, cost)
+
+    print("All scoring checks passed:", all_ok)
+
+    # DIAGNOSTIC: how often does each blob get seeded?
+    n_runs = 100
+    for kind in ["unequal", "unequal_noise"]:
+        X, y = datasets[kind]
+        print(
+            f"\n{kind}: fraction of {n_runs} runs with >= 1 seed in blobs 0-3, mean noise picks"
+        )
+        for metric in metrics:
+            G = None if metric == "euclidean" else graphs[kind][metric]
+            coverage, noise = hp.seed_coverage(
+                y, lambda r: seed_points(metric, X, G, 4, r), n_runs
+            )
+            print(
+                f"  {metric_label(metric):>9}: {np.round(coverage, 2)}  noise picks = {noise:.2f}"
+            )
+
+    print(
+        "\nlabel of the Fermat run-0 first seed (index 1871) on unequal_noise:",
+        datasets["unequal_noise"][1][1871],
+    )
