@@ -40,7 +40,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from scipy import sparse as sp
-from scipy.sparse.csgraph import connected_components, dijkstra
+from scipy.sparse.csgraph import (
+    connected_components,
+    dijkstra,
+    minimum_spanning_tree,
+)
+from scipy.spatial.distance import pdist, squareform
 from sklearn import cluster, neighbors
 from sklearn.datasets import make_blobs, make_moons
 
@@ -60,6 +65,7 @@ configs = [
     ("moons", 2),
 ]
 p_values = [1, 2, 4, 8, 16]
+k_nn = 10
 seed = 0
 
 
@@ -176,46 +182,45 @@ def make_dataset(
     return X, y
 
 
-def build_connected_knn(
-    X: np.ndarray, k_start: int = 10, step: int = 5
-) -> tuple[sp.csr_array, int]:
-    """Build a symmetric, connected kNN graph with Euclidean edge lengths.
+def build_graph(X: np.ndarray, k: int = 10) -> tuple[sp.csr_array, int, int]:
+    """Build a connected, symmetric graph: kNN graph union Euclidean MST.
 
-    Starts from each point's `k_start` nearest neighbors and increases k
-    by `step` until the graph has a single connected component. An edge
-    is kept if either endpoint is among the other's k nearest neighbors.
+    The kNN graph keeps the graph local and sparse; the minimum spanning
+    tree of the complete Euclidean graph guarantees connectivity by adding
+    the shortest edges needed to join any disconnected pieces.
 
     Parameters
     ----------
     X : ndarray of shape (n, 2)
         Point coordinates.
-    k_start : int, default=10
-        Initial number of neighbors per point.
-    step : int, default=5
-        Amount k increases by after each disconnected attempt.
+    k : int, default=10
+        Number of neighbors per point in the kNN graph.
 
     Returns
     -------
     G : scipy.sparse.csr_array of shape (n, n)
         Symmetric adjacency matrix whose stored entries are Euclidean
-        distances between neighboring points. Raising the entries to the
-        power p gives the Fermat cost graph.
-    k : int
-        Number of neighbors used in the final, connected graph.
+        distances. Raising the entries to the power p gives the Fermat
+        cost graph.
+    n_components : int
+        Number of connected components of the kNN graph alone.
+    n_added : int
+        Number of edges the MST contributed that the kNN graph lacked.
     """
-    k = k_start
-    D = sp.csr_array(neighbors.kneighbors_graph(X, k, mode="distance"))
-    # Symmetrize by keeping an edge if either point is one of the other's k nearest
-    G = D.maximum(D.T)
+    # kNN graph, symmetrized by keeping an edge if either point is a neighbor of the other
+    knn = sp.csr_array(neighbors.kneighbors_graph(X, k, mode="distance"))
+    knn = knn.maximum(knn.T)
+    n_components, _ = connected_components(knn, directed=False)
 
-    n_components, _ = connected_components(G, directed=False)
-    while n_components > 1:  # keep increasing k until the graph is connected
-        k += step
-        D = sp.csr_array(neighbors.kneighbors_graph(X, k, mode="distance"))
-        G = D.maximum(D.T)
-        n_components, _ = connected_components(G, directed=False)
+    # MST of euclidean graph, also symmetrized
+    mst = sp.csr_array(minimum_spanning_tree(squareform(pdist(X))))
+    mst = mst.maximum(mst.T)
 
-    return G, k
+    G = knn.maximum(mst)
+    n_added = (G.nnz - knn.nnz) // 2  # Undirected edges are stored twice
+    # ^^^ counts ALL mst edges missing, not just bridges between clusters
+
+    return G, n_components, n_added
 
 
 def fermat_kmeanspp(
@@ -313,12 +318,21 @@ if __name__ == "__main__":
         np.savez(f"data/{kind}.npz", X=X, y=y)
 
     # GRAPHS:
-    graphs, k_nn_used = {}, {}
+    graphs, graph_info = {}, {}
     for kind, (X, y) in datasets.items():
-        knn, k_nn = build_connected_knn(X)
-        k_nn_used[kind] = k_nn
-        graphs[kind] = {p: knn.power(p) for p in p_values}
-        print(f"{kind}: k_nn = {k_nn}")
+        G, n_comp, n_added = build_graph(X, k=k_nn)
+        graph_info[kind] = {
+            "knn_components": n_comp,
+            "mst_edges_added": n_added,
+        }
+        graphs[kind] = {p: G.power(p) for p in p_values}
+
+        n_after, _ = connected_components(G, directed=False)
+        print(
+            f"{kind}: kNN components = {n_comp}, MST edges added = {n_added}, "
+            f"components after = {n_after}, avg degree = {G.nnz / G.shape[0]:.1f}, "
+            f"symmetric = {(G != G.T).nnz == 0}"
+        )
 
     # SEED CHECKS:
     for p in p_values:
