@@ -360,6 +360,35 @@ def representation_cost(dist_to_seeds: np.ndarray) -> tuple[np.ndarray, float]:
     return regions, cost
 
 
+def seed_accuracy(
+    regions: np.ndarray, seeds: np.ndarray, y: np.ndarray
+) -> float:
+    """Fraction of clean points whose nearest seed has their true label.
+
+    Each point is assigned the label of its nearest seed. Accuracy is
+    measured only on clean points (y != -1). A seed on a noise point
+    has label -1, so every clean point in its region counts as wrong.
+
+    Parameters
+    ----------
+    regions : ndarray of shape (n,)
+        Index of the nearest seed for each point, from representation_cost.
+    seeds : ndarray of shape (n_seeds,)
+        Seed indices into the dataset.
+    y : ndarray of shape (n,)
+        True labels; noise points are labeled -1.
+
+    Returns
+    -------
+    float
+        Accuracy in [0, 1] over points with y != -1.
+    """
+    predicted = y[seeds][regions]  # (n,): label of each point's nearest seed
+    clean = y != -1
+    return float((predicted[clean] == y[clean]).mean())
+
+
+# TODO: Move most random dev diagostics to scratch file before adding sweep
 if __name__ == "__main__":
     # DATASETS:
     kinds = list(dict.fromkeys(kind for kind, _ in configs))
@@ -450,4 +479,34 @@ if __name__ == "__main__":
     print(
         "\nlabel of the Fermat run-0 first seed (index 1871) on unequal_noise:",
         datasets["unequal_noise"][1][1871],
+    )
+
+    # ACCURACY CHECKS:
+    # 1. Clean unequal, p = 2, run 0: one seed per blob, so about 100%
+    X, y = datasets["unequal"]
+    G = graphs["unequal"][2]
+    s = seed_points(2, X, G, 4, run=0)
+    regions, _ = representation_cost(distances_to_seeds(s, G=G))
+    acc = seed_accuracy(regions, s, y)
+    print(
+        f"unequal, p = 2, run 0: seeds per blob = {np.bincount(y[s], minlength=4)}, "
+        f"accuracy = {acc:.3f} (expect ~1)"
+    )
+
+    # 2. All seeds on noise points: every region gets label -1, so exactly 0%
+    X, y = datasets["unequal_noise"]
+    s = np.flatnonzero(y == -1)[:4]
+    regions, _ = representation_cost(distances_to_seeds(s, X=X))
+    acc = seed_accuracy(regions, s, y)
+    print(f"all-noise seeds: accuracy = {acc:.3f} (expect 0)")
+    assert acc == 0.0
+
+    # 3. Moons (k=2), Euclidean, run 0: if both seeds land in one moon, exactly 50%
+    X, y = datasets["moons"]
+    s = seed_points("euclidean", X, None, 2, run=0)
+    regions, _ = representation_cost(distances_to_seeds(s, X=X))
+    acc = seed_accuracy(regions, s, y)
+    print(
+        f"moons (k=2), Euclidean, run 0: seeds per moon = {np.bincount(y[s], minlength=2)}, "
+        f"accuracy = {acc:.3f}"
     )
